@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>⚡ 魔法泡泡保衛戰 - AI 動態捕捉遊戲 ⚡</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@3.11.0/dist/tfjs-core.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@3.11.0/dist/tfjs-converter.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@3.11.0/dist/tfjs-backend-webgl.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose@0.0.7/dist/handpose.min.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #111122, #1a1a3a);
+            color: #fff;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header-container {
+            text-align: center;
+            margin-bottom: 10px;
+            z-index: 5;
+        }
+
+        h1 {
+            margin: 5px 0;
+            font-size: 24px;
+            color: #ffeb3b;
+            text-shadow: 0 0 12px rgba(255, 235, 59, 0.6);
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            margin: 0;
+            font-size: 13px;
+            color: #b0bec5;
+        }
+
+        #game-container {
+            position: relative;
+            width: 90vw;
+            max-width: 640px;
+            height: 67.5vw; /* 4:3 比例 */
+            max-height: 480px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+            border: 5px solid #4fc3f7;
+            border-radius: 20px;
+            background-color: #050510;
+            overflow: hidden;
+        }
+
+        /* 畫布與鏡頭水平翻轉鏡像 */
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+        }
+
+        .hud-box {
+            background: rgba(10, 10, 30, 0.75);
+            padding: 6px 14px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border: 2px solid #4fc3f7;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 15, 30, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+            z-index: 10;
+            transition: opacity 0.5s ease, visibility 0.5s;
+        }
+
+        .spinner {
+            border: 5px solid rgba(255,255,255,0.1);
+            border-top: 5px solid #ffeb3b;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+            box-shadow: 0 0 15px rgba(255, 235, 59, 0.2);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #start-prompt {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #4fc3f7;
+            color: #111;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 15px;
+            display: none;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(79, 195, 247, 0.4);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        /* 隱藏原生攝影機元件 */
+        #webcam {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header-container">
+        <h1>🔮 魔法泡泡保衛戰 🔮</h1>
+        <p class="subtitle">適合 Android 手機與電腦！請舉起雙手用「指尖」戳破掉落的粉紅泡泡吧！</p>
+    </div>
+
+    <div id="game-container">
+        <div id="loading-screen">
+            <div class="spinner" id="loading-spinner"></div>
+            <div id="loading-text" style="font-size: 16px; line-height: 1.5; max-width: 80%;">正在召喚 AI 魔法鏡頭...<br><span style="font-size:12px; color:#90a4ae;">(首次載入模型需要約 10-20 秒，請保持網路連線)</span></div>
+            <div id="start-prompt" onclick="startAudioAndGame()">🪄 點擊這裡進入魔法世界</div>
+        </div>
+
+        <video id="webcam" autoplay playsinline muted></video>
+        
+        <canvas id="gameCanvas" width="640" height="480"></canvas>
+
+        <div id="ui-layer">
+            <div class="hud-box" style="color: #ffeb3b;">得分: <span id="score">0</span></div>
+            <div class="hud-box" style="color: #a7ffeb;"><span id="status">準備中...</span></div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const statusEl = document.getElementById('status');
+        const loadingScreen = document.getElementById('loading-screen');
+        const loadingText = document.getElementById('loading-text');
+        const startPrompt = document.getElementById('start-prompt');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        let model;
+        let score = 0;
+        let audioCtx;
+        let isModelLoaded = false;
+        
+        // 遊戲物件
+        let bubble = { x: 300, y: -50, radius: 45, speed: 3.5, color: 'rgba(255, 105, 180, 0.75)' };
+        let pointer = { x: -100, y: -100, lerpX: -100, lerpY: -100, active: false };
+        let particles = [];
+
+        // 初始化 Web Audio API（解決行動裝置必須由使用者點擊才能發聲的限制）
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // 行動裝置合成音效：啵！
+        function playPopSound() {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                // 頻率快速向上滑動，形成清脆的"啵"聲
+                osc.frequency.setValueAtTime(350, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1300, audioCtx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.12);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.12);
+            } catch(e) { console.log("音效播放失敗", e); }
+        }
+
+        // 點擊按鈕後啟動
+        function startAudioAndGame() {
+            initAudio();
+            loadingScreen.style.opacity = '0';
+            setTimeout(() => {
+                loadingScreen.style.display = 'none';
+            }, 500);
+            resetBubble();
+            gameLoop();
+        }
+
+        // 核心載入機制
+        async function init() {
+            try {
+                loadingText.innerHTML = "正在請求相機權限...<br><span style='font-size:12px; color:#ff8a80;'>Android 請務必點選『允許』唷！</span>";
+                
+                // 行動裝置與電腦自適應優化：強制請求前置鏡頭 (user)
+                const constraints = {
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: "user"
+                    },
+                    audio: false
+                };
+                
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve(video);
+                    };
+                });
+                
+                loadingText.innerHTML = "🧙‍♂️ 正在注入 AI 魔法視覺...<br><span style='font-size:12px; color:#81c784;'>即將完成，請稍候...</span>";
+                
+                // 載入 Handpose 模型
+                model = await handpose.load();
+                isModelLoaded = true;
+                
+                // 模型與相機都就緒後，顯示點擊按鈕（以符合行動裝置發聲規範）
+                loadingSpinner.style.display = 'none';
+                loadingText.innerHTML = "🎉 魔法加載完成！";
+                startPrompt.style.display = 'block';
+                statusEl.innerText = "請把手伸出來";
+                
+            } catch (error) {
+                console.error(error);
+                loadingSpinner.style.display = 'none';
+                loadingText.innerHTML = "❌ 哎呀！魔法失敗了...<br><span style='font-size:13px; color:#ff8a80;'>原因可能為：拒絕相機權限，或者未開啟 HTTPS 安全連線。</span>";
+            }
+        }
+
+        // 建立彩色破裂粒子效果
+        function createParticles(x, y) {
+            for (let i = 0; i < 18; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    radius: Math.random() * 4 + 2,
+                    alpha: 1,
+                    color: `hsl(${Math.random() * 50 + 320}, 100%, 75%)` // 夢幻亮粉與亮紫
+                });
+            }
+        }
+
+        // 遊戲主迴圈
+        async function gameLoop() {
+            // A. AI 手部即時追蹤偵測
+            try {
+                const predictions = await model.estimateHands(video);
+                
+                if (predictions.length > 0) {
+                    // 取得食指指尖 (Index Finger Tip) 的 3D 座標，節點編號為 8
+                    const indexFinger = predictions[0].landmarks[8];
+                    pointer.x = indexFinger[0];
+                    pointer.y = indexFinger[1];
+                    pointer.active = true;
+                    statusEl.innerText = "✨ 捕捉到魔幻手掌";
+                    statusEl.style.color = "#a7ffeb";
+                } else {
+                    pointer.active = false;
+                    statusEl.innerText = "👋 快把手伸出來唷！";
+                    statusEl.style.color = "#ff8a80";
+                }
+            } catch (e) {
+                console.log("偵測影格跳過");
+            }
+
+            // 如果有偵測到手，平滑化魔法游標位置 (Lerp 演算法)
+            if (pointer.active) {
+                if (pointer.lerpX === -100) {
+                    pointer.lerpX = pointer.x;
+                    pointer.lerpY = pointer.y;
+                } else {
+                    pointer.lerpX += (pointer.x - pointer.lerpX) * 0.35;
+                    pointer.lerpY += (pointer.y - pointer.lerpY) * 0.35;
+                }
+            }
+
+            // B. 遊戲物件更新邏輯
+            bubble.y += bubble.speed;
+            if (bubble.y - bubble.radius > canvas.height) {
+                resetBubble(); // 漏掉沒戳到，重設新的
+            }
+
+            // 粒子動畫更新
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= 0.025;
+                if (p.alpha <= 0) particles.splice(i, 1);
+            }
+
+            // C. 碰撞偵測（當食指靠近泡泡）
+            if (pointer.active) {
+                let dist = Math.hypot(pointer.lerpX - bubble.x, pointer.lerpY - bubble.y);
+                
+                // 行動裝置擴大寬容半徑，判定更貼心
+                if (dist < bubble.radius + 35) {
+                    score += 1;
+                    scoreEl.innerText = score;
+                    playPopSound();
+                    createParticles(bubble.x, bubble.y);
+                    resetBubble();
+                }
+            }
+
+            // D. 渲染畫面到 Canvas 上
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 1. 繪製當前攝影機畫面作為背景
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // 2. 繪製粉紅果凍魔法泡泡
+            ctx.beginPath();
+            ctx.arc(bubble.x, bubble.y, bubble.radius, 0, Math.PI * 2);
+            ctx.fillStyle = bubble.color;
+            ctx.fill();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+            ctx.stroke();
+            
+            // 泡泡亮光特效
+            ctx.beginPath();
+            ctx.arc(bubble.x - bubble.radius/3, bubble.y - bubble.radius/3, bubble.radius/4, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+            ctx.fill();
+
+            // 3. 繪製破裂彩色粒子
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = p.color;
+                ctx.fill();
+                ctx.restore();
+            });
+
+            // 4. 繪製玩家的「炫彩魔法光點」
+            if (pointer.active) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(pointer.lerpX, pointer.lerpY, 18, 0, Math.PI * 2);
+                ctx.fillStyle = "#00ffff";
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = "#00ffff";
+                ctx.fill();
+                
+                // 魔法核心內圈
+                ctx.beginPath();
+                ctx.arc(pointer.lerpX, pointer.lerpY, 8, 0, Math.PI * 2);
+                ctx.fillStyle = "#ffffff";
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // 持續執行下一影格
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 重設泡泡位置與難度隨機數
+        function resetBubble() {
+            bubble.x = Math.random() * (canvas.width - 140) + 70; 
+            bubble.y = -60;
+            let speedBonus = Math.min(score * 0.1, 4);
+            bubble.speed = Math.random() * 3 + 3.5 + speedBonus; 
+            bubble.radius = Math.random() * 15 + 35; 
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
